@@ -74,11 +74,12 @@ class ChatSessionService:
             )
 
             # Upsert session
+            # Lưu ý: Không set token_usage trong $setOnInsert để tránh conflict với $inc
+            # $inc sẽ tự tạo các nested fields nếu chưa tồn tại
             update_doc: Dict[str, Any] = {
                 "$setOnInsert": {
                     "session_id": session_id,
                     "created_at": now,
-                    "token_usage": token_delta.model_dump(),
                 },
                 "$push": {"messages": {"$each": [user_msg.model_dump(), assistant_msg.model_dump()]}},
                 "$set": {"updated_at": now},
@@ -90,6 +91,7 @@ class ChatSessionService:
                 },
             }
 
+            # Set model nếu có (dùng $set riêng để tránh conflict)
             if token_delta.model:
                 update_doc.setdefault("$set", {})
                 update_doc["$set"]["token_usage.model"] = token_delta.model

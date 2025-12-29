@@ -1,2 +1,2 @@
-__all__ = ["Log"]
+__all__ = ["Log", "DatabaseSchema", "TableEmbedding"]
 

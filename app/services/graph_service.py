@@ -1,7 +1,8 @@
 from typing import Dict, Any, List, Optional
 import logging
 
-from app.graph import HitlGraph, HitlGraphState, hitl_graph
+from langchain_core.documents import Document
+from app.graph import Graph, GraphState, graph
 from app.services.chat_session_service import chat_session_service
 
 logger = logging.getLogger(__name__)
@@ -9,17 +10,17 @@ logger = logging.getLogger(__name__)
 
 class GraphService:
     """
-    Service wrapper rất đơn giản để test phần phân loại intent trong `HitlGraph`.
+    Service wrapper rất đơn giản để test phần phân loại intent trong `Graph`.
 
     - Dùng trực tiếp node `_classify_intent` của graph (không chạy cả workflow).
     - Trả về intent và state để bạn dễ debug.
     """
 
-    def _empty_state(self, query: str) -> HitlGraphState:
-        return HitlGraphState(
+    def _empty_state(self, query: str) -> GraphState:
+        return GraphState(
             messages=[],          # chưa dùng tới
             query=query,
-            intent="general",     # default
+            intent="out_of_scope",     # default
             draft_response="",
             suggested_actions=[],
             token_usage={},
@@ -27,6 +28,7 @@ class GraphService:
             phone_number="",
             name="",
             email="",
+            retrieved_docs=[],  # Kết quả truy vấn từ data retriever
         )
 
     async def classify_intent(
@@ -37,15 +39,16 @@ class GraphService:
 
         Returns:
             {
-              "intent": "consultation" | "course_registration" | "general",
-              "raw_query": <message gốc>
+              "intent": "text2sql" | "out_of_scope",
+              "raw_query": <message gốc>,
+              "retrieved_docs": <danh sách documents nếu intent là text2sql>
             }
         """
         try:
             state = self._empty_state(query=message)
-            # Dùng graph đã compile để chạy node `classify_intent`
-            final_state = await hitl_graph.graph.ainvoke(state)
-            intent = final_state.get("intent", "general")
+            # Dùng graph đã compile để chạy toàn bộ workflow
+            final_state = await graph.graph.ainvoke(state)
+            intent = final_state.get("intent", "out_of_scope")
 
             logger.info(f"[GraphService] intent={intent!r} for query={message[:80]!r}")
 
@@ -71,17 +74,21 @@ class GraphService:
             else:
                 logger.warning("[GraphService] No session_id provided, skipping log storage")
 
+            retrieved_docs = final_state.get("retrieved_docs", [])
+            
             return {
                 "final_state": final_state,
-                "raw_query": message,
-                "intent": intent,
+                # "raw_query": message,
+                # "intent": intent,
+                # "retrieved_docs": retrieved_docs,
             }
         except Exception as e:
             logger.error(f"Error in GraphService.classify_intent: {e}")
             # Fallback an toàn
             return {
-                "intent": "general",
+                "intent": "out_of_scope",
                 "raw_query": message,
+                "retrieved_docs": [],
                 "error": str(e),
             }
 

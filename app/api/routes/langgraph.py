@@ -25,7 +25,7 @@ async def classify_intent(request: IntentRequest):
     """
     Endpoint đơn giản để test graph (StateGraph) phân loại intent.
 
-    Sử dụng `HitlGraph` đã compile + `graph_service.classify_intent`.
+    Sử dụng `Graph` đã compile + `graph_service.classify_intent`.
     Tự động tạo session_id nếu không được cung cấp để lưu log.
     """
     # Tự động tạo session_id nếu không có để đảm bảo luôn lưu log

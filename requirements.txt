@@ -11,4 +11,7 @@ langchain-community==0.0.10
 langgraph==0.0.20
 openai==1.6.1
 tiktoken==0.5.2
+# SQL Database dependencies
+pymysql==1.1.0
+psycopg2-binary==2.9.9
 
