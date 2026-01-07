@@ -102,6 +102,83 @@ class Graph:
         intent = state.get("intent", "out_of_scope")
         return intent if intent in ["text2sql", "out_of_scope"] else "out_of_scope"
 
+    def _extract_schema_context(self, retrieved_docs: List[Document]) -> Dict[str, Any]:
+        """Lấy schema_doc_id và danh sách bảng từ retrieved_docs để log."""
+        schema_doc_id = None
+        tables: List[str] = []
+
+        for doc in retrieved_docs or []:
+            md = doc.metadata or {}
+            if not schema_doc_id:
+                schema_doc_id = md.get("schema_doc_id")
+
+            table_name = md.get("table_name")
+            table_schema = md.get("table_schema") or "public"
+            if table_name:
+                full_name = (
+                    f"{table_schema}.{table_name}"
+                    if table_schema and table_schema != "public"
+                    else table_name
+                )
+                tables.append(full_name)
+
+        # Loại bỏ trùng lặp, giữ thứ tự
+        seen = set()
+        unique_tables = []
+        for t in tables:
+            if t not in seen:
+                seen.add(t)
+                unique_tables.append(t)
+
+        return {"schema_doc_id": schema_doc_id, "tables": unique_tables}
+
+    def _categorize_sql_error(self, error_message: str) -> str:
+        """Phân loại lỗi SQL phổ biến để log/quan sát."""
+        msg = (error_message or "").lower()
+
+        table_column_patterns = [
+            "does not exist",
+            "unknown table",
+            "unknown column",
+            "undefined table",
+            "undefined column",
+            "no such table",
+            "no such column",
+        ]
+        syntax_patterns = [
+            "syntax error",
+            "parse error",
+            "at or near",
+            "sqlstate 42601",
+        ]
+        type_patterns = [
+            "type mismatch",
+            "cannot cast",
+            "invalid input syntax",
+            "data type mismatch",
+            "sqlstate 42804",
+        ]
+        permission_patterns = [
+            "permission denied",
+            "access denied",
+            "sqlstate 42501",
+            "role",
+            "not authorized",
+            "connection refused",
+            "could not connect",
+            "timeout",
+        ]
+
+        if any(p in msg for p in table_column_patterns):
+            return "table_or_column_not_found"
+        if any(p in msg for p in syntax_patterns):
+            return "syntax_error"
+        if any(p in msg for p in type_patterns):
+            return "type_mismatch"
+        if any(p in msg for p in permission_patterns):
+            return "permission_or_connection"
+        return "other"
+
     
 
     async def _classify_intent(self, state: GraphState) -> Dict[str, Any]:
@@ -240,6 +317,9 @@ class Graph:
         """Thực thi SQL query và lấy kết quả."""
         try:
             sql_query = state.get("sql_query", "")
+            sql_reason = state.get("sql_reason", "")
+            retrieved_docs = state.get("retrieved_docs", [])
+            schema_ctx = self._extract_schema_context(retrieved_docs)
             
             if not sql_query:
                 logger.warning("No SQL query to execute")
@@ -255,11 +335,29 @@ class Graph:
             success, result, error = sql_connector.execute_query_safe(sql_query)
             
             if success:
-                logger.info(f"SQL executed successfully. Result type: {type(result)}")
+                logger.info(
+                    "SQL executed successfully",
+                    extra={
+                        "result_type": str(type(result)),
+                        "schema_doc_id": schema_ctx.get("schema_doc_id"),
+                        "tables": schema_ctx.get("tables"),
+                    },
+                )
                 return {"sql_result": result, "sql_error": None}
             else:
-                logger.error(f"SQL execution failed: {error}")
-                return {"sql_result": None, "sql_error": error}
+                category = self._categorize_sql_error(error)
+                logger.error(
+                    "SQL execution failed",
+                    extra={
+                        "error": error,
+                        "category": category,
+                        "sql_query": sql_query,
+                        "sql_reason": sql_reason,
+                        "schema_doc_id": schema_ctx.get("schema_doc_id"),
+                        "tables": schema_ctx.get("tables"),
+                    },
+                )
+                return {"sql_result": None, "sql_error": error, "sql_error_category": category}
         except Exception as e:
             logger.error(f"Error in Graph execute_sql: {e}", exc_info=True)
             return {"sql_result": None, "sql_error": str(e)}
