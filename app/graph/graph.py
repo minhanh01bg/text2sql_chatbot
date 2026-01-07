@@ -8,8 +8,13 @@ from langchain_core.documents import Document
 from app.prompts.intent_prompt import INTENT_CLASSIFICATION_PROMPT
 from app.prompts.sql_planning_prompt import SQL_PLANNING_SYSTEM_PROMPT, SQL_PLANNING_USER_PROMPT
 from app.prompts.sql_generation_prompt import SQL_GENERATION_SYSTEM_PROMPT, SQL_GENERATION_USER_PROMPT
+from app.prompts.sql_correction_prompt import (
+    SQL_CORRECTION_SYSTEM_PROMPT,
+    SQL_CORRECTION_USER_PROMPT,
+)
 from app.schemas.intent_classifier import IntentClassifierSchema
 from app.schemas.sql_generation import SQLGenerationSchema
+from app.schemas.sql_correction import SQLCorrectionSchema
 from app.graph.data_retriever import DataRetriever
 from app.graph.schema_helper import get_table_schemas_from_retrieved_docs
 from app.core.sql_database import get_sql_connector
@@ -43,8 +48,12 @@ class GraphState(TypedDict):
     sql_plan: str  # SQL reasoning plan từ node plan_sql
     sql_query: str  # SQL query được sinh ra từ node generate_sql
     sql_reason: str  # Lý do tại sao viết SQL như vậy từ node generate_sql
+    corrected_sql: str  # SQL đã được node sql_correction sửa (nếu có)
+    sql_correction_reason: str  # Giải thích cách sửa SQL
+    has_retried: bool  # Đã retry thực thi SQL hay chưa
     sql_result: Any  # Kết quả thực thi SQL từ node execute_sql
     sql_error: Optional[str]  # Lỗi khi thực thi SQL (nếu có)
+    sql_error_category: Optional[str]  # Nhóm lỗi SQL (syntax, table_not_found, ...)
     final_response: str  # Response cuối cùng được format từ node format_response
 
 
@@ -73,6 +82,8 @@ class Graph:
         workflow.add_node("plan_sql", self._plan_sql)
         workflow.add_node("generate_sql", self._generate_sql)
         workflow.add_node("execute_sql", self._execute_sql)
+        # Node sql_correction sẽ được nối vào workflow sau khi review
+        workflow.add_node("sql_correction", self._sql_correction)
         workflow.add_node("format_response", self._format_response)
 
         workflow.set_entry_point("classify_intent")
@@ -308,10 +319,80 @@ class Graph:
                 # logger.info(f"Generated SQL query: {sql_query[:100]}...")
                 # logger.debug(f"SQL generation reason: {sql_reason[:200]}...")
             
-            return {"sql_query": sql_query, "sql_reason": sql_reason}
+            # Khi generate xong SQL lần đầu, reset các field liên quan đến correction
+            return {
+                "sql_query": sql_query,
+                "sql_reason": sql_reason,
+                "corrected_sql": "",
+                "sql_correction_reason": "",
+                "has_retried": False,
+            }
         except Exception as e:
             logger.error(f"Error in Graph generate_sql: {e}", exc_info=True)
             return {"sql_query": ""}
+
+    async def _sql_correction(self, state: GraphState) -> Dict[str, Any]:
+        """Sử dụng LLM để sửa SQL bị lỗi dựa trên error_message và schema (chưa nối vào flow)."""
+        try:
+            # Nếu đã retry rồi thì không sửa nữa (guard an toàn)
+            if state.get("has_retried", False):
+                logger.info("SQL correction skipped because has_retried=True")
+                return {}
+
+            sql_query = state.get("sql_query", "")
+            sql_error = state.get("sql_error", "") or ""
+            retrieved_docs = state.get("retrieved_docs", [])
+
+            if not sql_query or not sql_error:
+                logger.warning(
+                    "SQL correction skipped because sql_query or sql_error is empty"
+                )
+                return {}
+
+            # Lấy CREATE TABLE statements từ MongoDB để hỗ trợ sửa lỗi chính xác
+            table_schema = await get_table_schemas_from_retrieved_docs(retrieved_docs)
+            if not table_schema:
+                logger.warning(
+                    "SQL correction: could not retrieve table schemas from MongoDB"
+                )
+                return {}
+
+            lc_messages = [
+                SystemMessage(content=SQL_CORRECTION_SYSTEM_PROMPT),
+                HumanMessage(
+                    content=SQL_CORRECTION_USER_PROMPT.format(
+                        table_schema=table_schema,
+                        invalid_sql=sql_query,
+                        error_message=sql_error,
+                    )
+                ),
+            ]
+
+            with get_openai_callback() as cb:
+                llm_with_structured = self.llm.with_structured_output(
+                    SQLCorrectionSchema
+                )
+                response = await llm_with_structured.ainvoke(lc_messages)
+                corrected_sql = response.sql.strip()
+                correction_reason = response.reason
+
+            logger.info(
+                "SQL correction generated successfully",
+                extra={
+                    "original_sql_preview": sql_query[:100],
+                    "corrected_sql_preview": corrected_sql[:100],
+                },
+            )
+
+            return {
+                "corrected_sql": corrected_sql,
+                "sql_correction_reason": correction_reason,
+                "has_retried": True,
+            }
+        except Exception as e:
+            logger.error(f"Error in Graph sql_correction: {e}", exc_info=True)
+            # Nếu correction lỗi, không thay đổi state, để flow chính xử lý error như cũ
+            return {}
     
     async def _execute_sql(self, state: GraphState) -> Dict[str, Any]:
         """Thực thi SQL query và lấy kết quả."""
@@ -319,7 +400,7 @@ class Graph:
             sql_query = state.get("sql_query", "")
             sql_reason = state.get("sql_reason", "")
             retrieved_docs = state.get("retrieved_docs", [])
-            schema_ctx = self._extract_schema_context(retrieved_docs)
+            # schema_ctx = self._extract_schema_context(retrieved_docs)
             
             if not sql_query:
                 logger.warning("No SQL query to execute")
@@ -339,8 +420,8 @@ class Graph:
                     "SQL executed successfully",
                     extra={
                         "result_type": str(type(result)),
-                        "schema_doc_id": schema_ctx.get("schema_doc_id"),
-                        "tables": schema_ctx.get("tables"),
+                        # "schema_doc_id": schema_ctx.get("schema_doc_id"),
+                        # "tables": schema_ctx.get("tables"),
                     },
                 )
                 return {"sql_result": result, "sql_error": None}
@@ -353,8 +434,6 @@ class Graph:
                         "category": category,
                         "sql_query": sql_query,
                         "sql_reason": sql_reason,
-                        "schema_doc_id": schema_ctx.get("schema_doc_id"),
-                        "tables": schema_ctx.get("tables"),
                     },
                 )
                 return {"sql_result": None, "sql_error": error, "sql_error_category": category}
