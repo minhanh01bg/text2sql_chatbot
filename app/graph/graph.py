@@ -61,8 +61,15 @@ class Graph:
     """Graph chung cho xử lý intent và truy vấn dữ liệu.
 
     Luồng:
-        classify_intent -> (text2sql) -> create_query -> plan_sql -> generate_sql -> execute_sql -> format_response -> END
+        classify_intent -> (text2sql) -> create_query -> plan_sql -> generate_sql -> execute_sql -> (format_response | sql_correction -> execute_sql) -> format_response -> END
         classify_intent -> (out_of_scope) -> END
+    
+    SQL Correction Flow:
+        - Nếu execute_sql fail và lỗi thuộc nhóm retriable (table/column not found, syntax error, type mismatch)
+          và chưa retry (has_retried=False), sẽ đi đến sql_correction
+        - sql_correction sẽ sửa SQL và set has_retried=True
+        - Sau đó quay lại execute_sql để thử lại với corrected_sql
+        - Nếu vẫn fail hoặc đã retry rồi, đi thẳng đến format_response
     """
 
     def __init__(self, data_retriever: Optional[DataRetriever] = None) -> None:
@@ -98,11 +105,24 @@ class Graph:
             }
         )
         
-        # Flow cho text2sql: create_query -> plan_sql -> generate_sql -> execute_sql -> format_response -> END
+        # Flow cho text2sql: create_query -> plan_sql -> generate_sql -> execute_sql -> (format_response | sql_correction) -> END
         workflow.add_edge("create_query", "plan_sql")
         workflow.add_edge("plan_sql", "generate_sql")
         workflow.add_edge("generate_sql", "execute_sql")
-        workflow.add_edge("execute_sql", "format_response")
+        
+        # Conditional edge: nếu SQL fail và có thể retry -> sql_correction, ngược lại -> format_response
+        workflow.add_conditional_edges(
+            "execute_sql",
+            self._route_after_execute_sql,
+            {
+                "format_response": "format_response",
+                "sql_correction": "sql_correction",
+            }
+        )
+        
+        # Sau khi correction, retry lại execute_sql
+        workflow.add_edge("sql_correction", "execute_sql")
+        
         workflow.add_edge("format_response", END)
 
         # POC: chưa gắn checkpointer, mỗi call là một lượt độc lập (theo session_id ở service)
@@ -112,6 +132,54 @@ class Graph:
         """Routing sau khi phân loại intent."""
         intent = state.get("intent", "out_of_scope")
         return intent if intent in ["text2sql", "out_of_scope"] else "out_of_scope"
+    
+    def _should_retry_sql(self, state: GraphState) -> bool:
+        """Quyết định có nên retry SQL bằng cách gọi sql_correction hay không.
+        
+        Returns:
+            True nếu nên retry (chưa retry và lỗi thuộc nhóm retriable)
+            False nếu không nên retry
+        """
+        # Nếu đã retry rồi thì không retry nữa
+        if state.get("has_retried", False):
+            return False
+        
+        # Nếu không có lỗi thì không cần retry
+        sql_error = state.get("sql_error")
+        if not sql_error:
+            return False
+        
+        # Chỉ retry với các lỗi có thể sửa được (logic/syntax errors)
+        category = state.get("sql_error_category", "")
+        retriable_categories = [
+            "table_or_column_not_found",
+            "syntax_error",
+            "type_mismatch",
+        ]
+        
+        return category in retriable_categories
+    
+    def _route_after_execute_sql(self, state: GraphState) -> str:
+        """Routing sau khi thực thi SQL.
+        
+        Returns:
+            "format_response" nếu success hoặc không nên retry
+            "sql_correction" nếu fail và nên retry
+        """
+        sql_error = state.get("sql_error")
+        
+        # Nếu không có lỗi, đi thẳng đến format_response
+        if not sql_error:
+            return "format_response"
+        
+        # Nếu có lỗi và nên retry, đi đến sql_correction
+        if self._should_retry_sql(state):
+            logger.info("Routing to sql_correction for retry")
+            return "sql_correction"
+        
+        # Nếu có lỗi nhưng không nên retry, đi thẳng đến format_response
+        logger.info("Routing to format_response (no retry)")
+        return "format_response"
 
     def _extract_schema_context(self, retrieved_docs: List[Document]) -> Dict[str, Any]:
         """Lấy schema_doc_id và danh sách bảng từ retrieved_docs để log."""
@@ -395,14 +463,23 @@ class Graph:
             return {}
     
     async def _execute_sql(self, state: GraphState) -> Dict[str, Any]:
-        """Thực thi SQL query và lấy kết quả."""
+        """Thực thi SQL query và lấy kết quả.
+        
+        Nếu có corrected_sql (từ node sql_correction), sẽ ưu tiên dùng corrected_sql.
+        Nếu không có, dùng sql_query gốc.
+        """
         try:
             sql_query = state.get("sql_query", "")
+            corrected_sql = state.get("corrected_sql", "")
             sql_reason = state.get("sql_reason", "")
             retrieved_docs = state.get("retrieved_docs", [])
             # schema_ctx = self._extract_schema_context(retrieved_docs)
             
-            if not sql_query:
+            # Ưu tiên dùng corrected_sql nếu có (từ node sql_correction)
+            sql_to_execute = corrected_sql if corrected_sql else sql_query
+            is_using_corrected = bool(corrected_sql)
+            
+            if not sql_to_execute:
                 logger.warning("No SQL query to execute")
                 return {"sql_result": None, "sql_error": "Không có SQL query để thực thi"}
             
@@ -412,14 +489,30 @@ class Graph:
                 logger.error("SQL connector is not available")
                 return {"sql_result": None, "sql_error": "Không thể kết nối đến database"}
             
+            # Log thông tin SQL sẽ thực thi
+            if is_using_corrected:
+                logger.info(
+                    "Executing corrected SQL",
+                    extra={
+                        "original_sql_preview": sql_query[:100] if sql_query else "",
+                        "corrected_sql_preview": corrected_sql[:100],
+                    },
+                )
+            else:
+                logger.info(
+                    "Executing original SQL",
+                    extra={"sql_preview": sql_to_execute[:100]},
+                )
+            
             # Thực thi SQL
-            success, result, error = sql_connector.execute_query_safe(sql_query)
+            success, result, error = sql_connector.execute_query_safe(sql_to_execute)
             
             if success:
                 logger.info(
                     "SQL executed successfully",
                     extra={
                         "result_type": str(type(result)),
+                        "used_corrected_sql": is_using_corrected,
                         # "schema_doc_id": schema_ctx.get("schema_doc_id"),
                         # "tables": schema_ctx.get("tables"),
                     },
@@ -432,8 +525,9 @@ class Graph:
                     extra={
                         "error": error,
                         "category": category,
-                        "sql_query": sql_query,
+                        "sql_query": sql_to_execute[:200] if sql_to_execute else "",
                         "sql_reason": sql_reason,
+                        "used_corrected_sql": is_using_corrected,
                     },
                 )
                 return {"sql_result": None, "sql_error": error, "sql_error_category": category}
