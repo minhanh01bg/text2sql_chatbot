@@ -1,2 +1,2 @@
-__all__ = ["Log", "DatabaseSchema", "TableEmbedding"]
+__all__ = ["Log", "DatabaseSchema", "TableEmbedding", "KnowledgeBaseDocument", "KnowledgeBaseChunkEmbedding"]
 
