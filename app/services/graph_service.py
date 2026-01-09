@@ -24,11 +24,17 @@ class GraphService:
             draft_response="",
             suggested_actions=[],
             token_usage={},
-            course_name="",
-            phone_number="",
-            name="",
-            email="",
             retrieved_docs=[],  # Kết quả truy vấn từ data retriever
+            sql_plan="",
+            sql_query="",
+            sql_reason="",
+            corrected_sql="",
+            sql_correction_reason="",
+            has_retried=False,
+            sql_result=None,
+            sql_error=None,
+            sql_error_category=None,
+            final_response="",
         )
 
     async def classify_intent(
@@ -74,7 +80,7 @@ class GraphService:
             else:
                 logger.warning("[GraphService] No session_id provided, skipping log storage")
 
-            retrieved_docs = final_state.get("retrieved_docs", [])
+            # retrieved_docs = final_state.get("retrieved_docs", [])
             
             return {
                 "final_state": final_state,

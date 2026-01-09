@@ -40,10 +40,6 @@ class GraphState(TypedDict):
     draft_response: str
     suggested_actions: List[str]
     token_usage: Dict[str, Any]
-    course_name: str  # Khóa học muốn đăng ký
-    phone_number: str  # Số điện thoại học viên
-    name: str  # Tên học viên
-    email: str  # Email học viên
     retrieved_docs: List[Document]  # Kết quả truy vấn từ data retriever
     sql_plan: str  # SQL reasoning plan từ node plan_sql
     sql_query: str  # SQL query được sinh ra từ node generate_sql
