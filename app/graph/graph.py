@@ -12,10 +12,15 @@ from app.prompts.sql_correction_prompt import (
     SQL_CORRECTION_SYSTEM_PROMPT,
     SQL_CORRECTION_USER_PROMPT,
 )
+from app.prompts.out_of_scope_prompt import (
+    OUT_OF_SCOPE_SYSTEM_PROMPT,
+    OUT_OF_SCOPE_USER_PROMPT,
+)
 from app.schemas.intent_classifier import IntentClassifierSchema
 from app.schemas.sql_generation import SQLGenerationSchema
 from app.schemas.sql_correction import SQLCorrectionSchema
 from app.graph.data_retriever import DataRetriever
+from app.graph.knowledge_base_retriever import KnowledgeBaseRetriever
 from app.graph.schema_helper import get_table_schemas_from_retrieved_docs
 from app.core.sql_database import get_sql_connector
 
@@ -58,7 +63,7 @@ class Graph:
 
     Luồng:
         classify_intent -> (text2sql) -> create_query -> plan_sql -> generate_sql -> execute_sql -> (format_response | sql_correction -> execute_sql) -> format_response -> END
-        classify_intent -> (out_of_scope) -> END
+        classify_intent -> (out_of_scope) -> handle_out_of_scope -> format_response -> END
     
     SQL Correction Flow:
         - Nếu execute_sql fail và lỗi thuộc nhóm retriable (table/column not found, syntax error, type mismatch)
@@ -66,15 +71,26 @@ class Graph:
         - sql_correction sẽ sửa SQL và set has_retried=True
         - Sau đó quay lại execute_sql để thử lại với corrected_sql
         - Nếu vẫn fail hoặc đã retry rồi, đi thẳng đến format_response
+    
+    Out of Scope Flow:
+        - Khi intent là out_of_scope, đi đến handle_out_of_scope
+        - handle_out_of_scope sẽ retrieve từ knowledge base (nếu có kb_retriever)
+        - Generate response từ retrieved context và user query
+        - Đi đến format_response để trả về cho user
     """
 
-    def __init__(self, data_retriever: Optional[DataRetriever] = None) -> None:
+    def __init__(
+        self,
+        data_retriever: Optional[DataRetriever] = None,
+        kb_retriever: Optional[KnowledgeBaseRetriever] = None,
+    ) -> None:
         self.llm = ChatOpenAI(
             model_name="gpt-4o-mini",
             temperature=0.7,
             openai_api_key=settings.openai_api_key,
         )
         self.data_retriever = data_retriever
+        self.kb_retriever = kb_retriever
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -85,21 +101,24 @@ class Graph:
         workflow.add_node("plan_sql", self._plan_sql)
         workflow.add_node("generate_sql", self._generate_sql)
         workflow.add_node("execute_sql", self._execute_sql)
-        # Node sql_correction sẽ được nối vào workflow sau khi review
         workflow.add_node("sql_correction", self._sql_correction)
+        workflow.add_node("handle_out_of_scope", self._handle_out_of_scope)
         workflow.add_node("format_response", self._format_response)
 
         workflow.set_entry_point("classify_intent")
         
-        # Conditional edge: nếu intent là text2sql thì đi đến create_query, ngược lại END
+        # Conditional edge: nếu intent là text2sql thì đi đến create_query, out_of_scope -> handle_out_of_scope
         workflow.add_conditional_edges(
             "classify_intent",
             self._route_after_intent,
             {
                 "text2sql": "create_query",
-                "out_of_scope": END,
+                "out_of_scope": "handle_out_of_scope",
             }
         )
+        
+        # Flow cho out_of_scope: handle_out_of_scope -> format_response -> END
+        workflow.add_edge("handle_out_of_scope", "format_response")
         
         # Flow cho text2sql: create_query -> plan_sql -> generate_sql -> execute_sql -> (format_response | sql_correction) -> END
         workflow.add_edge("create_query", "plan_sql")
@@ -568,6 +587,66 @@ class Graph:
         except Exception as e:
             logger.error(f"Error in Graph format_response: {e}", exc_info=True)
             return {"final_response": f"Lỗi khi format response: {str(e)}"}
+    
+    async def _handle_out_of_scope(self, state: GraphState) -> Dict[str, Any]:
+        """Xử lý câu hỏi out_of_scope bằng cách retrieve từ knowledge base và generate response."""
+        try:
+            query = state.get("query", "")
+            
+            if not query:
+                logger.warning("No query provided for out_of_scope handling")
+                return {"final_response": "Xin lỗi, tôi không hiểu câu hỏi của bạn."}
+            
+            # Retrieve từ knowledge base nếu có kb_retriever
+            retrieved_context = ""
+            if self.kb_retriever:
+                try:
+                    retriever = self.kb_retriever.get_kb_retriever()
+                    if retriever:
+                        retrieved_docs = await retriever.ainvoke(query)
+                        if retrieved_docs:
+                            # Format retrieved documents thành context string
+                            context_parts = []
+                            for doc in retrieved_docs:
+                                context_parts.append(doc.page_content)
+                            retrieved_context = "\n\n---\n\n".join(context_parts)
+                            logger.info(
+                                f"Retrieved {len(retrieved_docs)} documents from knowledge base "
+                                f"for query: {query[:50]}..."
+                            )
+                        else:
+                            logger.info("No relevant documents found in knowledge base")
+                    else:
+                        logger.warning("Knowledge base retriever is not available")
+                except Exception as e:
+                    logger.error(f"Error retrieving from knowledge base: {e}", exc_info=True)
+                    # Continue without retrieved context
+            else:
+                logger.info("Knowledge base retriever not initialized, skipping retrieval")
+            
+            # Nếu không có retrieved context, vẫn trả lời nhưng thông báo không có thông tin
+            if not retrieved_context:
+                retrieved_context = "Không có thông tin liên quan trong knowledge base."
+            
+            # Gọi LLM để generate response
+            lc_messages = [
+                SystemMessage(content=OUT_OF_SCOPE_SYSTEM_PROMPT),
+                HumanMessage(content=OUT_OF_SCOPE_USER_PROMPT.format(
+                    user_query=query,
+                    retrieved_context=retrieved_context,
+                )),
+            ]
+            
+            with get_openai_callback() as cb:
+                response = await self.llm.ainvoke(lc_messages)
+                final_response = response.content.strip()
+                
+                logger.info(f"Generated out_of_scope response for query: {query[:50]}...")
+            
+            return {"final_response": final_response}
+        except Exception as e:
+            logger.error(f"Error in Graph handle_out_of_scope: {e}", exc_info=True)
+            return {"final_response": f"Xin lỗi, đã xảy ra lỗi khi xử lý câu hỏi của bạn: {str(e)}"}
 
 
 graph = Graph()

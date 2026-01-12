@@ -5,6 +5,7 @@ from app.core.database import connect_to_mongo, close_mongo_connection
 from app.core.sql_database import init_sql_connector, get_sql_connector
 from app.api.routes import api_router
 from app.graph.data_retriever import DataRetriever
+from app.graph.knowledge_base_retriever import KnowledgeBaseRetriever
 from app.graph import graph
 import logging
 
@@ -91,6 +92,26 @@ async def startup_event():
         logger.error("✗ LỖI KHI LOAD SCHEMA EMBEDDINGS!")
         logger.error(f"  - Error: {str(e)}")
         logger.error("=" * 60)
+    
+    # Load knowledge base embeddings và khởi tạo KnowledgeBaseRetriever
+    logger.info("=" * 60)
+    logger.info("Đang load knowledge base embeddings từ MongoDB...")
+    try:
+        kb_retriever = await KnowledgeBaseRetriever.create_with_embeddings()
+        if kb_retriever and kb_retriever.kb_vectorstore:
+            logger.info("✓ KNOWLEDGE BASE EMBEDDINGS LOADED SUCCESSFULLY!")
+            # Cập nhật graph instance với kb_retriever
+            graph.kb_retriever = kb_retriever
+            logger.info("  - KnowledgeBaseRetriever đã được khởi tạo và gắn vào Graph")
+        else:
+            logger.warning("⚠ Không thể load knowledge base embeddings từ MongoDB")
+            logger.warning("   Có thể chưa có knowledge base documents. Upload DOCX files trước.")
+    except Exception as e:
+        logger.warning("=" * 60)
+        logger.warning("⚠ LỖI KHI LOAD KNOWLEDGE BASE EMBEDDINGS!")
+        logger.warning(f"  - Error: {str(e)}")
+        logger.warning("   Graph vẫn hoạt động nhưng không có knowledge base cho out_of_scope")
+        logger.warning("=" * 60)
     
     logger.info("Application started successfully")
 

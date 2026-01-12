@@ -11,7 +11,7 @@ class KnowledgeBaseDocument(BaseModel):
     Mỗi document có thể được split thành nhiều chunks, mỗi chunk có embedding riêng.
     """
 
-    id: Optional[str] = Field(None, alias="_id")
+    # id: Optional[str] = Field(None, alias="_id")
     source_id: str  # ID logic để group (ví dụ: file_id hoặc business key)
     filename: str
     content_type: str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -34,7 +34,7 @@ class KnowledgeBaseChunkEmbedding(BaseModel):
     - Một document = một chunk (đoạn text) của một KnowledgeBaseDocument
     """
 
-    id: Optional[str] = Field(None, alias="_id")
+    # id: Optional[str] = Field(None, alias="_id")
     document_id: str  # Reference tới KnowledgeBaseDocument
     source_id: str  # Redundant để query nhanh theo source
     chunk_index: int
