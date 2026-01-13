@@ -50,9 +50,13 @@ async def load_knowledge_base_embeddings_from_mongodb(
     
     embeddings = []
     async for doc in cursor:
-        # Convert ObjectId to string
+        # Lưu lại _id dưới dạng string để dùng cho metadata (model không có field id)
+        mongo_id = str(doc["_id"]) if "_id" in doc else None
+
+        # Remove _id khỏi doc trước khi parse vào Pydantic model (model không có trường id)
         if "_id" in doc:
-            doc["_id"] = str(doc["_id"])
+            doc.pop("_id", None)
+
         # Convert datetime fields
         for field in ["created_at", "updated_at"]:
             if field in doc and not isinstance(doc[field], datetime):
@@ -62,7 +66,11 @@ async def load_knowledge_base_embeddings_from_mongodb(
                     pass
         
         try:
-            embeddings.append(KnowledgeBaseChunkEmbedding(**doc))
+            kb_chunk = KnowledgeBaseChunkEmbedding(**doc)
+            # Gắn mongo_id vào metadata để truy xuất sau
+            kb_chunk.metadata = kb_chunk.metadata or {}
+            kb_chunk.metadata["mongo_id"] = mongo_id
+            embeddings.append(kb_chunk)
         except Exception as e:
             logger.warning(f"Error parsing embedding document: {e}")
             continue
@@ -115,7 +123,7 @@ async def create_knowledge_base_vectorstore(
             "document_id": emb.document_id,
             "source_id": emb.source_id,
             "chunk_index": emb.chunk_index,
-            "embedding_id": str(emb.id) if emb.id else None,
+            "embedding_id": emb.metadata.get("mongo_id"),
             "embedding_model": emb.embedding_model,
         }
         # Merge với metadata từ embedding

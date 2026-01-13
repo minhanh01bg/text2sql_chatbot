@@ -117,7 +117,7 @@ class KnowledgeBaseRetriever:
         retriever = (
             self.kb_vectorstore.as_retriever(
                 search_type="mmr",
-                search_kwargs={"k": 5, "lambda_mult": 0.5}  # Lấy ít hơn cho knowledge base (5 vs 50)
+                search_kwargs={"k": 50, "lambda_mult": 0.5}  # Lấy ít hơn cho knowledge base (5 vs 50)
             )
             if self.kb_vectorstore
             else None

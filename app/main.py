@@ -102,10 +102,8 @@ async def startup_event():
             logger.info("✓ KNOWLEDGE BASE EMBEDDINGS LOADED SUCCESSFULLY!")
             # Cập nhật graph instance với kb_retriever
             graph.kb_retriever = kb_retriever
-            logger.info("  - KnowledgeBaseRetriever đã được khởi tạo và gắn vào Graph")
         else:
             logger.warning("⚠ Không thể load knowledge base embeddings từ MongoDB")
-            logger.warning("   Có thể chưa có knowledge base documents. Upload DOCX files trước.")
     except Exception as e:
         logger.warning("=" * 60)
         logger.warning("⚠ LỖI KHI LOAD KNOWLEDGE BASE EMBEDDINGS!")
