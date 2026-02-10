@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from urllib.parse import quote
 from dotenv import load_dotenv
 
+from sqlalchemy import text as sa_text
 from langchain_community.utilities import SQLDatabase
 from langchain_community.tools.sql_database.tool import QuerySQLDatabaseTool
 
@@ -116,24 +117,43 @@ class SQLDatabaseConnector:
         else:
             raise ValueError(f"Database type '{self.db_type}' không được hỗ trợ")
     
-    def execute_query(self, query: str) -> Any:
+    def execute_query(self, query: str) -> Dict[str, Any]:
         """
-        Thực thi câu SQL query
-        
+        Thực thi câu SQL query và trả về kết quả dạng bảng có cấu trúc.
+
+        Thay vì dùng SQLDatabase.run (trả về chuỗi đã format sẵn),
+        hàm này truy vấn trực tiếp qua SQLAlchemy engine để lấy:
+        - columns: danh sách tên cột
+        - rows: list[dict], mỗi dict là một hàng {col: value}
+
         Parameters
         ----------
         query : str
             Câu SQL query cần thực thi
-        
+
         Returns
         -------
-        Any
-            Kết quả truy vấn
+        Dict[str, Any]
+            {
+                "columns": list[str],
+                "rows": list[dict]
+            }
+            Kết quả dạng bảng, thuận tiện cho frontend visualize.
         """
         try:
-            logger.debug(f"Thực thi query: {query[:100]}...")
-            result = self.sql_tool.run(query)
-            return result
+            logger.debug(f"Thực thi query (structured): {query[:100]}...")
+            # Truy vấn trực tiếp qua SQLAlchemy engine bên trong SQLDatabase
+            with self.db._engine.connect() as conn:  # type: ignore[attr-defined]
+                result = conn.execute(sa_text(query))
+                rows_raw = result.fetchall()
+                columns = list(result.keys())
+
+            rows: List[Dict[str, Any]] = [
+                {col: value for col, value in zip(columns, row)}
+                for row in rows_raw
+            ]
+
+            return {"columns": columns, "rows": rows}
         except Exception as e:
             logger.error(f"Lỗi khi thực thi query: {e}")
             raise
