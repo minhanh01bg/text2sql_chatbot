@@ -1,0 +1,49 @@
+# Build và chạy backend (FastAPI) + frontend (Next.js)
+# Cần file .env ở thư mục gốc (openai_api_key, mongodb_url, mongodb_db_name, ...)
+#
+# Kết nối MongoDB / PostgreSQL chạy trên HOST (ngoài Docker):
+# - Trong container, "localhost" là chính container, không phải máy host.
+# - Dùng host.docker.internal để trỏ tới host (extra_hosts bên dưới).
+# - Mongo: nếu .env đang dùng mongodb://localhost:27017/, đổi thành
+#   mongodb://host.docker.internal:27017/ hoặc bỏ MONGODB_URL để dùng mặc định.
+# - Postgres: POSTGRES_HOST mặc định đã là host.docker.internal.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: fast-base-backend
+    container_name: fast-base-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Mongo trên host: dùng host.docker.internal thay localhost (nếu .env đang dùng localhost thì ghi đè ở đây)
+      - MONGODB_URL=${MONGODB_URL:-mongodb://host.docker.internal:27017/}
+      - MONGODB_DB_NAME=${MONGODB_DB_NAME}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Postgres trên host: dùng host.docker.internal
+      - POSTGRES_HOST=${POSTGRES_HOST:-host.docker.internal}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    image: fast-base-frontend
+    container_name: fast-base-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped

@@ -1,0 +1,35 @@
+# Git & IDE
+.git
+.gitignore
+.cursor
+*.md
+!frontend/README.md
+
+# Env (dùng env_file trong compose, không copy vào image)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__
+*.py[cod]
+*.egg-info
+.venv
+venv
+.pytest_cache
+.mypy_cache
+*.egg
+
+# Node / Next
+node_modules
+frontend/node_modules
+frontend/.next
+frontend/out
+.npm
+.yarn
+
+# Build & misc
+Dockerfile*
+docker-compose*
+*.log
+.ai-q-a-bot-datalake

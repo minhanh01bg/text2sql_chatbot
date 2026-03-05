@@ -72,6 +72,41 @@ MONGODB_DB_NAME=ai_base_db
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+## Schema embedding (Text2SQL)
+
+Để dùng tính năng truy vấn SQL bằng ngôn ngữ tự nhiên, cần tạo và lưu embedding cho schema database. **Chạy đúng thứ tự** hai script sau:
+
+### Bước 1: Trích xuất schema từ SQL → MongoDB
+
+Script đọc schema (tables, columns, PK, FK, indexes) từ PostgreSQL/MySQL và lưu vào MongoDB.
+
+```bash
+python -m app.core.extract_database_schema
+```
+
+Kết quả in ra **document ID** schema vừa lưu (có thể dùng cho bước 2).
+
+### Bước 2: Tạo embedding cho schema → lưu MongoDB
+
+Script đọc schema từ MongoDB (bước 1), tạo embedding (OpenAI) cho từng bảng rồi lưu vào MongoDB.
+
+```bash
+python -m app.core.create_schema_embeddings
+```
+
+Chỉ định schema theo ID (tùy chọn):
+
+```bash
+python -m app.core.create_schema_embeddings --schema-doc-id <id_từ_bước_1>
+```
+
+**Lưu ý:** Cần cấu hình PostgreSQL/MySQL trong `.env` (POSTGRES_* hoặc MYSQL_*) và MongoDB (MONGODB_*, OPENAI_API_KEY) trước khi chạy.
+
+| Bước | File | Mục đích |
+|------|------|----------|
+| 1 | `app.core.extract_database_schema` | SQL DB → lấy schema → lưu MongoDB |
+| 2 | `app.core.create_schema_embeddings` | MongoDB (schema) → tạo embedding → lưu MongoDB |
+
 ## API Endpoints
 
 ### Chat
