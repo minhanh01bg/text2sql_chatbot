@@ -12,7 +12,7 @@ export default function Home() {
             </h1>
           </div>
           <span className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-700">
-            API: http://localhost:8001
+            API: http://localhost:8009
           </span>
         </div>
       </header>
