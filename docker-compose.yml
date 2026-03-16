@@ -21,7 +21,7 @@ services:
       - .env
     environment:
       # Mongo trên host: dùng host.docker.internal thay localhost (nếu .env đang dùng localhost thì ghi đè ở đây)
-      - MONGODB_URL=${MONGODB_URL:-mongodb://host.docker.internal:27017/}
+      - MONGODB_URL=${MONGODB_URL:-mongodb://host.docker.internal:2118/}
       # Đọc từ .env
       - MONGODB_DB_NAME=${MONGODB_DB_NAME}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
