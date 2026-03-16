@@ -16,12 +16,13 @@ services:
     image: fast-base-backend
     container_name: fast-base-backend
     ports:
-      - "8000:8000"
+      - "8001:8001"
     env_file:
       - .env
     environment:
       # Mongo trên host: dùng host.docker.internal thay localhost (nếu .env đang dùng localhost thì ghi đè ở đây)
       - MONGODB_URL=${MONGODB_URL:-mongodb://host.docker.internal:27017/}
+      # Đọc từ .env
       - MONGODB_DB_NAME=${MONGODB_DB_NAME}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       # Postgres trên host: dùng host.docker.internal
@@ -39,11 +40,12 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8001
     image: fast-base-frontend
     container_name: fast-base-frontend
     ports:
-      - "3000:3000"
+      - "3001:3001"
     depends_on:
       - backend
     restart: unless-stopped
+

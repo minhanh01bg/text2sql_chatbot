@@ -10,7 +10,12 @@ from dotenv import load_dotenv
 
 from sqlalchemy import text as sa_text
 from langchain_community.utilities import SQLDatabase
-from langchain_community.tools.sql_database.tool import QuerySQLDatabaseTool
+# Try both import names for compatibility
+try:
+    from langchain_community.tools.sql_database.tool import QuerySQLDatabaseTool
+except ImportError:
+    # Fallback to old naming (pre-Dec 2024)
+    from langchain_community.tools.sql_database.tool import QuerySQLDataBaseTool as QuerySQLDatabaseTool
 
 from app.core.config import settings
 

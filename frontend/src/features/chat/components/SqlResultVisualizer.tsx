@@ -1,7 +1,9 @@
+import React from "react";
 import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   LabelList,
   Pie,
   PieChart,
@@ -181,7 +183,7 @@ function renderChart({
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis
                 dataKey={xKey ?? ""}
-                tick={{ fontSize: 11, angle: -25, dy: 6 }}
+                tick={{ fontSize: 11, angle: -25, dy: 6 } as React.SVGProps<SVGTextElement>}
                 tickFormatter={(v) => truncate(String(v))}
               />
               <YAxis tick={{ fontSize: 12 }} />
@@ -216,7 +218,7 @@ function renderChart({
                 label={(d) => truncate(String(d.name))}
               >
                 {chartData.map((_, idx) => (
-                  <cell key={idx} fill={colors[idx % colors.length]} />
+                  <Cell key={idx} fill={colors[idx % colors.length]} />
                 ))}
               </Pie>
             </PieChart>
@@ -231,7 +233,6 @@ function renderChart({
               data={chartData}
               dataKey={yKey ?? ""}
               nameKey={xKey ?? ""}
-              ratio={4 / 3}
               stroke="#fff"
               content={<CustomTreemapContent colors={colors} />}
             />

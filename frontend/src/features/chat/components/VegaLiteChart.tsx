@@ -24,7 +24,7 @@ export function VegaLiteChart({ spec, className }: VegaLiteChartProps) {
 
     import("vega-embed").then(({ default: vegaEmbed }) => {
       if (cancelled || !node) return;
-      vegaEmbed(node, spec, {
+      vegaEmbed(node, spec as any, {
         actions: false,
         renderer: "canvas",
       }).catch((err: Error) => {
