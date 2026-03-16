@@ -16,7 +16,7 @@ services:
     image: fast-base-backend
     container_name: fast-base-backend
     ports:
-      - "8011:8011"
+      - "28111:28111"
     env_file:
       - .env
     environment:
@@ -40,7 +40,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:8011
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:28111
     image: fast-base-frontend
     container_name: fast-base-frontend
     ports:
